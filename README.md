@@ -17,13 +17,13 @@ An intelligent AI agent that monitors your Home Assistant devices and provides c
 1. Make sure you have [HACS](https://hacs.xyz/) installed
 2. Add this repository as a custom repository in HACS:
    - Go to HACS → Integrations → ⋮ (menu) → Custom repositories
-   - Add `https://github.com/yourusername/hacs-homeassistant-overseer` with category "Integration"
+   - Add the repository URL with category "Integration"
 3. Click "Install" on the AI Overseer integration
 4. Restart Home Assistant
 
 ### Manual Installation
 
-1. Copy the `overseer_agent` folder to your Home Assistant `custom_components` directory
+1. Copy the `custom_components/overseer_agent` folder to your Home Assistant `custom_components` directory
 2. Restart Home Assistant
 
 ## Configuration

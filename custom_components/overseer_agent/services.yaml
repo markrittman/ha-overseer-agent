@@ -1,0 +1,43 @@
+# Service definitions for the Overseer Agent
+
+overseer_agent:
+  query:
+    name: Query AI Overseer
+    description: Send a query to the AI Overseer agent
+    fields:
+      query:
+        name: Query
+        description: The query to send to the AI Overseer
+        required: true
+        example: "What's the status of my living room lights?"
+        selector:
+          text:
+            multiline: true
+
+  analyze_entity:
+    name: Analyze Entity
+    description: Request the AI Overseer to analyze a specific entity
+    fields:
+      entity_id:
+        name: Entity ID
+        description: The entity ID to analyze
+        required: true
+        example: "light.living_room"
+        selector:
+          entity:
+
+  analyze_domain:
+    name: Analyze Domain
+    description: Request the AI Overseer to analyze all entities in a domain
+    fields:
+      domain:
+        name: Domain
+        description: The domain to analyze
+        required: true
+        example: "light"
+        selector:
+          text:
+
+  clear_insights:
+    name: Clear Insights
+    description: Clear the AI Overseer's insight history
