@@ -5,7 +5,8 @@
   "dependencies": ["conversation", "websocket_api", "http", "lovelace"],
   "codeowners": [],
   "requirements": [
-    "langchain>=0.1.0",
+    "langchain>=0.0.267",
+    "langchain-community>=0.0.1",
     "google-cloud-aiplatform>=1.25.0"
   ],
   "config_flow": false,

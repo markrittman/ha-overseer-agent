@@ -28,15 +28,39 @@ from homeassistant.components.websocket_api.connection import ActiveConnection
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.helpers.event import async_call_later
 
-from langchain.llms import VertexAI
-from langchain.agents import initialize_agent, AgentType
-from langchain.memory import ConversationBufferMemory
-from langchain.tools import BaseTool
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
-
-DOMAIN = "overseer_agent"
-_LOGGER = logging.getLogger(__name__)
+# Handle different versions of LangChain
+try:
+    # For newer versions of LangChain (>= 0.1.0)
+    from langchain_community.llms import VertexAI
+    from langchain.agents import initialize_agent, AgentType
+    from langchain.memory import ConversationBufferMemory
+    from langchain.tools import BaseTool
+    from langchain.chains import LLMChain
+    from langchain.prompts import PromptTemplate
+except ImportError:
+    try:
+        # For older versions of LangChain (< 0.1.0)
+        from langchain.llms import VertexAI
+        from langchain.agents import initialize_agent, AgentType
+        from langchain.memory import ConversationBufferMemory
+        from langchain.tools import BaseTool
+        from langchain.chains import LLMChain
+        from langchain.prompts import PromptTemplate
+    except ImportError:
+        _LOGGER = logging.getLogger(__name__)
+        _LOGGER.error("Failed to import LangChain. Make sure it's installed correctly.")
+        VertexAI = None
+        initialize_agent = None
+        AgentType = None
+        ConversationBufferMemory = None
+        BaseTool = None
+        LLMChain = None
+        PromptTemplate = None
+        DOMAIN = "overseer_agent"
+else:
+    DOMAIN = "overseer_agent"
+    _LOGGER = logging.getLogger(__name__)
+    _LOGGER.info("Using newer LangChain API (>= 0.1.0)")
 
 # Service constants
 SERVICE_QUERY = "query"
@@ -296,126 +320,6 @@ class OverseerAgent:
         )
         
         _LOGGER.info("Registered Overseer Agent websocket commands")
-
-    async def _handle_query_service(self, call: ServiceCall):
-        """Handle the query service call."""
-        query = call.data.get("query")
-        if not query:
-            return
-            
-        response = await self.process_conversation_query(query)
-        
-        # Add to insights
-        self._add_insight(
-            f"User asked: {query}\nMy response: {response}",
-            "query"
-        )
-        
-        # Set the response as an attribute of the service call
-        self.hass.states.async_set(
-            f"{DOMAIN}.last_response",
-            "active",
-            {
-                "query": query,
-                "response": response,
-                "timestamp": datetime.now().isoformat()
-            }
-        )
-        
-    async def _handle_analyze_entity_service(self, call: ServiceCall):
-        """Handle the analyze entity service call."""
-        entity_id = call.data.get("entity_id")
-        if not entity_id:
-            return
-            
-        query = f"Analyze the entity {entity_id} and provide detailed insights about its current state and recent behavior."
-        response = await self.process_conversation_query(query)
-        
-        # Add to insights
-        self._add_insight(
-            f"Analysis of {entity_id}: {response}",
-            "entity_analysis"
-        )
-        
-        # Set the response as an attribute of the service call
-        self.hass.states.async_set(
-            f"{DOMAIN}.entity_analysis",
-            entity_id,
-            {
-                "entity_id": entity_id,
-                "analysis": response,
-                "timestamp": datetime.now().isoformat()
-            }
-        )
-        
-    async def _handle_analyze_domain_service(self, call: ServiceCall):
-        """Handle the analyze domain service call."""
-        domain = call.data.get("domain")
-        if not domain:
-            return
-            
-        query = f"Analyze all entities in the {domain} domain and provide insights about their current states and patterns."
-        response = await self.process_conversation_query(query)
-        
-        # Add to insights
-        self._add_insight(
-            f"Analysis of {domain} domain: {response}",
-            "domain_analysis"
-        )
-        
-        # Set the response as an attribute of the service call
-        self.hass.states.async_set(
-            f"{DOMAIN}.domain_analysis",
-            domain,
-            {
-                "domain": domain,
-                "analysis": response,
-                "timestamp": datetime.now().isoformat()
-            }
-        )
-        
-    async def _handle_clear_insights_service(self, call: ServiceCall):
-        """Handle the clear insights service call."""
-        self.insights.clear()
-        self._add_insight(
-            "Insight history has been cleared.",
-            "system"
-        )
-        
-        # Notify subscribers
-        self._notify_subscribers()
-        
-    @callback
-    async def _handle_websocket_insights(self, hass, connection, msg):
-        """Handle websocket request for insights."""
-        count = msg.get("count", len(self.insights))
-        insights = list(self.insights)[-count:]
-        
-        connection.send_result(
-            msg["id"],
-            {"insights": [insight.as_dict() for insight in insights]}
-        )
-        
-    @callback
-    async def _handle_websocket_subscribe(self, hass, connection, msg):
-        """Handle websocket subscription to insights."""
-        self.subscribers.add(connection)
-        
-        @callback
-        def unsub():
-            self.subscribers.remove(connection)
-            
-        connection.subscriptions[msg["id"]] = unsub
-        connection.send_result(msg["id"])
-        
-        # Send current insights
-        insights = list(self.insights)
-        connection.send_message(
-            websocket_api.event_message(
-                msg["id"],
-                {"insights": [insight.as_dict() for insight in insights]}
-            )
-        )
 
     def should_track_entity(self, entity_id: str) -> bool:
         """Determine if an entity should be tracked based on configuration."""
