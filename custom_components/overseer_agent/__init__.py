@@ -214,15 +214,42 @@ class OverseerAgent:
         try:
             # Initialize Vertex AI
             try:
+                # Check if credentials file exists
+                import os
+                credentials_path = self.config["google_cloud_credentials"]
+                if not os.path.exists(credentials_path):
+                    _LOGGER.error(f"Google Cloud credentials file not found at: {credentials_path}")
+                    _LOGGER.error("Please ensure your credentials file exists and the path is correct in configuration.yaml")
+                    raise FileNotFoundError(f"Credentials file not found: {credentials_path}")
+                
+                # Check if project ID is provided
+                project_id = self.config["google_cloud_project_id"]
+                if not project_id:
+                    _LOGGER.error("Google Cloud project ID is empty or not provided")
+                    _LOGGER.error("Please set a valid project ID in configuration.yaml")
+                    raise ValueError("Google Cloud project ID is required")
+                
+                # Set environment variable for credentials
+                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+                
                 self.llm = VertexAI(
-                    project=self.config["google_cloud_project_id"],
-                    credentials_path=self.config["google_cloud_credentials"],
+                    project=project_id,
+                    credentials_path=credentials_path,
                     model_name="gemini-2.0-flash",
                     temperature=0.1,
                     max_output_tokens=1024
                 )
+                _LOGGER.info(f"Successfully initialized VertexAI with project ID: {project_id}")
+            except FileNotFoundError as e:
+                _LOGGER.error(f"Google Cloud credentials file not found: {str(e)}")
+                raise
+            except ValueError as e:
+                _LOGGER.error(f"Invalid configuration value: {str(e)}")
+                raise
             except Exception as e:
                 _LOGGER.error(f"Failed to initialize VertexAI: {str(e)}")
+                import traceback
+                _LOGGER.error(f"VertexAI initialization traceback: {traceback.format_exc()}")
                 raise
             
             # Initialize tools
@@ -233,36 +260,75 @@ class OverseerAgent:
             
             # Initialize the memory
             try:
-                # Try newer memory API with ChatMessageHistory
-                from langchain_core.memory import ChatMessageHistory
-                chat_memory = ChatMessageHistory()
+                # Try newer memory API with ChatMessageHistory from langchain_core
+                try:
+                    from langchain_core.memory import ChatMessageHistory
+                    from langchain_core.messages import HumanMessage, AIMessage
+                    
+                    # Create a chat message history
+                    chat_memory = ChatMessageHistory()
+                    
+                    # Add a system message to initialize the conversation
+                    system_message = "I am the Home Assistant AI Overseer Agent. I can help you understand what's happening in your home and answer questions about your devices."
+                    chat_memory.add_message(HumanMessage(content=f"System: {system_message}"))
+                    chat_memory.add_message(AIMessage(content="I'm ready to help you understand your home and devices."))
+                    
+                    # Create memory with proper parameters to avoid deprecation warnings
+                    self.memory = ConversationBufferMemory(
+                        chat_memory=chat_memory,
+                        return_messages=True,
+                        memory_key="chat_history",
+                        output_key=None,  # Explicitly set to None to avoid deprecation warning
+                        input_key=None    # Explicitly set to None to avoid deprecation warning
+                    )
+                    _LOGGER.info("Using newer memory API with ChatMessageHistory from langchain_core")
+                except (ImportError, AttributeError) as e:
+                    # Try older memory API but still with ChatMessageHistory
+                    _LOGGER.debug(f"Could not use langchain_core memory: {str(e)}")
+                    from langchain.memory import ChatMessageHistory
+                    chat_memory = ChatMessageHistory()
+                    self.memory = ConversationBufferMemory(
+                        chat_memory=chat_memory,
+                        return_messages=True,
+                        memory_key="chat_history"
+                    )
+                    _LOGGER.info("Using older memory API with ChatMessageHistory from langchain")
+            except Exception as e:
+                # Fall back to basic memory API as a last resort
+                _LOGGER.warning(f"Could not initialize memory with ChatMessageHistory: {str(e)}")
                 self.memory = ConversationBufferMemory(
-                    chat_memory=chat_memory,
                     return_messages=True,
                     memory_key="chat_history"
                 )
-                _LOGGER.info("Using newer memory API with ChatMessageHistory")
-            except ImportError:
-                # Fall back to older memory API
-                self.memory = ConversationBufferMemory(
-                    return_messages=True,
-                    memory_key="chat_history"
-                )
-                _LOGGER.info("Using older memory API")
+                _LOGGER.info("Using basic memory API without ChatMessageHistory")
             
             # Initialize the agent
             # Note: LangChain agents are deprecated in favor of LangGraph.
             # We'll continue using agents for now, but plan to migrate to LangGraph in a future version.
             try:
-                self.agent = initialize_agent(
-                    tools=tools,
-                    llm=self.llm,
-                    agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
-                    memory=self.memory,
-                    verbose=True
-                )
+                import warnings
+                from langchain.agents import AgentExecutor
+                
+                # Temporarily suppress the LangChain deprecation warning
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
+                    
+                    # Create the agent with initialize_agent
+                    self.agent = initialize_agent(
+                        tools=tools,
+                        llm=self.llm,
+                        agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
+                        memory=self.memory,
+                        verbose=True
+                    )
+                    
+                    # Log that we're aware of the deprecation
+                    _LOGGER.info("Agent initialized successfully (using deprecated LangChain agents API)")
+                    _LOGGER.info("Future versions will migrate to LangGraph for agent functionality")
             except Exception as e:
                 _LOGGER.error(f"Failed to initialize agent: {str(e)}")
+                import traceback
+                _LOGGER.error(f"Agent initialization traceback: {traceback.format_exc()}")
                 raise
             
             # Start listening for state changes
@@ -360,10 +426,11 @@ class OverseerAgent:
             })
         )
         
+        # Use the same handler for subscription as it already handles adding to subscribers
         websocket_api.async_register_command(
             self.hass,
             WS_TYPE_OVERSEER_SUBSCRIBE,
-            self._handle_websocket_subscribe,
+            self._handle_websocket_insights,
             websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend({
                 vol.Required("type"): WS_TYPE_OVERSEER_SUBSCRIBE,
             })
@@ -723,10 +790,26 @@ class OverseerConversationAgent:
                     return
             except (ImportError, AttributeError) as e:
                 _LOGGER.debug(f"Could not register with legacy API: {str(e)}")
+            
+            # Try direct component registration as a last resort
+            try:
+                from homeassistant.components import conversation
+                if hasattr(conversation, "DOMAIN"):
+                    # Get the conversation component
+                    component = self.hass.data.get(conversation.DOMAIN)
+                    if component and hasattr(component, "async_set_agent"):
+                        await component.async_set_agent(self)
+                        _LOGGER.info("Registered conversation agent using component direct access")
+                        return
+            except Exception as e:
+                _LOGGER.debug(f"Could not register with component direct access: {str(e)}")
                 
             _LOGGER.error("Could not register conversation agent - conversation component API has changed")
+            _LOGGER.error("Please check Home Assistant version compatibility or report this issue")
         except Exception as e:
             _LOGGER.error(f"Error registering conversation agent: {str(e)}")
+            import traceback
+            _LOGGER.error(f"Registration traceback: {traceback.format_exc()}")
                 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Overseer Agent component."""
