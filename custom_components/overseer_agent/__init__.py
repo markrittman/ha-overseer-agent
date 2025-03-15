@@ -378,66 +378,76 @@ class OverseerAgent:
 
     def _register_services(self):
         """Register services for the component."""
-        self.hass.services.async_register(
-            DOMAIN, 
-            SERVICE_QUERY, 
-            self._handle_query_service, 
-            schema=vol.Schema({
-                vol.Required("query"): cv.string,
-            })
-        )
-        
-        self.hass.services.async_register(
-            DOMAIN, 
-            SERVICE_ANALYZE_ENTITY, 
-            self._handle_analyze_entity_service, 
-            schema=vol.Schema({
-                vol.Required("entity_id"): cv.entity_id,
-            })
-        )
-        
-        self.hass.services.async_register(
-            DOMAIN, 
-            SERVICE_ANALYZE_DOMAIN, 
-            self._handle_analyze_domain_service, 
-            schema=vol.Schema({
-                vol.Required("domain"): cv.string,
-            })
-        )
-        
-        self.hass.services.async_register(
-            DOMAIN, 
-            SERVICE_CLEAR_INSIGHTS, 
-            self._handle_clear_insights_service, 
-            schema=vol.Schema({})
-        )
-        
-        _LOGGER.info("Registered Overseer Agent services")
+        try:
+            self.hass.services.async_register(
+                DOMAIN, 
+                SERVICE_QUERY, 
+                self._handle_query_service, 
+                schema=vol.Schema({
+                    vol.Required("query"): cv.string,
+                })
+            )
+            
+            self.hass.services.async_register(
+                DOMAIN, 
+                SERVICE_ANALYZE_ENTITY, 
+                self._handle_analyze_entity_service, 
+                schema=vol.Schema({
+                    vol.Required("entity_id"): cv.entity_id,
+                })
+            )
+            
+            self.hass.services.async_register(
+                DOMAIN, 
+                SERVICE_ANALYZE_DOMAIN, 
+                self._handle_analyze_domain_service, 
+                schema=vol.Schema({
+                    vol.Required("domain"): cv.string,
+                })
+            )
+            
+            self.hass.services.async_register(
+                DOMAIN, 
+                SERVICE_CLEAR_INSIGHTS, 
+                self._handle_clear_insights_service, 
+                schema=vol.Schema({})
+            )
+            
+            _LOGGER.info("Registered Overseer Agent services")
+        except Exception as e:
+            _LOGGER.error(f"Failed to register services: {str(e)}")
+            import traceback
+            _LOGGER.error(f"Service registration traceback: {traceback.format_exc()}")
         
     def _register_websocket_commands(self):
         """Register websocket commands."""
-        websocket_api.async_register_command(
-            self.hass,
-            WS_TYPE_OVERSEER_INSIGHTS,
-            self._handle_websocket_insights,
-            websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend({
-                vol.Required("type"): WS_TYPE_OVERSEER_INSIGHTS,
-                vol.Optional("count"): vol.Coerce(int),
-            })
-        )
-        
-        # Use the same handler for subscription as it already handles adding to subscribers
-        websocket_api.async_register_command(
-            self.hass,
-            WS_TYPE_OVERSEER_SUBSCRIBE,
-            self._handle_websocket_insights,
-            websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend({
-                vol.Required("type"): WS_TYPE_OVERSEER_SUBSCRIBE,
-            })
-        )
-        
-        _LOGGER.info("Registered Overseer Agent websocket commands")
-
+        try:
+            websocket_api.async_register_command(
+                self.hass,
+                WS_TYPE_OVERSEER_INSIGHTS,
+                self._handle_websocket_insights,
+                websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend({
+                    vol.Required("type"): WS_TYPE_OVERSEER_INSIGHTS,
+                    vol.Optional("count"): vol.Coerce(int),
+                })
+            )
+            
+            # Use the same handler for subscription as it already handles adding to subscribers
+            websocket_api.async_register_command(
+                self.hass,
+                WS_TYPE_OVERSEER_SUBSCRIBE,
+                self._handle_websocket_insights,
+                websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend({
+                    vol.Required("type"): WS_TYPE_OVERSEER_SUBSCRIBE,
+                })
+            )
+            
+            _LOGGER.info("Registered Overseer Agent websocket commands")
+        except Exception as e:
+            _LOGGER.error(f"Failed to register websocket commands: {str(e)}")
+            import traceback
+            _LOGGER.error(f"Websocket registration traceback: {traceback.format_exc()}")
+            
     async def _handle_websocket_insights(self, hass, connection, msg):
         """Handle websocket requests for insights."""
         connection.send_result(msg["id"])
@@ -813,17 +823,37 @@ class OverseerConversationAgent:
                 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Overseer Agent component."""
-    conf = config.get(DOMAIN, {})
-    
-    # Initialize the overseer agent
-    agent = OverseerAgent(hass, conf)
-    hass.data[DOMAIN] = agent
-    
-    # Register the frontend custom card
-    await _register_frontend_resources(hass)
-    
-    # Start the agent
-    return await agent.async_start()
+    try:
+        conf = config.get(DOMAIN, {})
+        
+        # Check if configuration exists
+        if not conf:
+            _LOGGER.error("No configuration found for overseer_agent in configuration.yaml")
+            return False
+            
+        # Check for required configuration
+        if "google_cloud_project_id" not in conf:
+            _LOGGER.error("Missing required configuration: google_cloud_project_id")
+            return False
+            
+        if "google_cloud_credentials" not in conf:
+            _LOGGER.error("Missing required configuration: google_cloud_credentials")
+            return False
+        
+        # Initialize the overseer agent
+        agent = OverseerAgent(hass, conf)
+        hass.data[DOMAIN] = agent
+        
+        # Register the frontend custom card
+        await _register_frontend_resources(hass)
+        
+        # Start the agent
+        return await agent.async_start()
+    except Exception as e:
+        _LOGGER.error(f"Failed to set up Overseer Agent component: {str(e)}")
+        import traceback
+        _LOGGER.error(f"Setup traceback: {traceback.format_exc()}")
+        return False
 
 async def _register_frontend_resources(hass: HomeAssistant) -> None:
     """Register frontend resources for the custom card."""
