@@ -1,8 +1,8 @@
 {
   "domain": "overseer_agent",
   "name": "AI Overseer Agent",
-  "documentation": "https://github.com/your-username/hacs-homeassistant-overseer",
-  "dependencies": ["conversation"],
+  "documentation": "https://github.com/markrittman/ha-overseer-agent",
+  "dependencies": ["conversation", "websocket_api", "http", "lovelace"],
   "codeowners": [],
   "requirements": [
     "langchain>=0.1.0",

@@ -34,29 +34,38 @@ class OverseerCard extends LitElement {
         margin: 0;
         font-size: 18px;
         font-weight: 500;
+      }
+      .card-header .actions {
+        display: flex;
+      }
+      .card-header .actions button {
+        background: none;
+        border: none;
+        padding: 8px;
+        cursor: pointer;
         color: var(--primary-text-color);
+        border-radius: 50%;
+      }
+      .card-header .actions button:hover {
+        background: var(--secondary-background-color);
       }
       .console {
-        background-color: var(--card-background-color, #1c1c1c);
-        border-radius: 8px;
+        background-color: var(--card-background-color, #000);
+        border-radius: 4px;
         padding: 16px;
-        height: 400px;
+        height: 300px;
         overflow-y: auto;
         font-family: 'Courier New', monospace;
-        color: var(--primary-text-color);
-        display: flex;
-        flex-direction: column-reverse;
+        color: var(--primary-text-color, #0f0);
+        border: 1px solid var(--divider-color);
       }
       .insight {
         margin-bottom: 16px;
-        padding-bottom: 16px;
-        border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.1));
-        animation: fadeIn 0.5s ease-in;
+        border-bottom: 1px solid var(--divider-color);
+        padding-bottom: 8px;
       }
-      .insight-content {
-        margin-top: 4px;
-        white-space: pre-wrap;
-        line-height: 1.5;
+      .insight:last-child {
+        border-bottom: none;
       }
       .insight-header {
         display: flex;
@@ -65,12 +74,8 @@ class OverseerCard extends LitElement {
         color: var(--secondary-text-color);
         margin-bottom: 4px;
       }
-      .insight-source {
-        text-transform: uppercase;
-        font-weight: bold;
-      }
-      .insight-timestamp {
-        opacity: 0.7;
+      .insight-content {
+        white-space: pre-wrap;
       }
       .empty-state {
         display: flex;
@@ -82,57 +87,12 @@ class OverseerCard extends LitElement {
       }
       .empty-state ha-icon {
         margin-bottom: 8px;
-        --mdc-icon-size: 40px;
+        --mdi-icon-size: 40px;
       }
-      .controls {
-        display: flex;
-        justify-content: flex-end;
+      .connection-error {
+        color: var(--error-color);
         margin-top: 8px;
-      }
-      .controls button {
-        background: var(--primary-color);
-        color: var(--text-primary-color);
-        border: none;
-        border-radius: 4px;
-        padding: 8px 16px;
-        font-size: 14px;
-        cursor: pointer;
-        margin-left: 8px;
-      }
-      .controls button.secondary {
-        background: var(--secondary-background-color);
-        color: var(--primary-text-color);
-      }
-      .source-system {
-        color: var(--info-color, #4285f4);
-      }
-      .source-event_analysis {
-        color: var(--success-color, #0f9d58);
-      }
-      .source-query, .source-conversation {
-        color: var(--warning-color, #f4b400);
-      }
-      .source-entity_analysis, .source-domain_analysis {
-        color: var(--accent-color, #db4437);
-      }
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-      .status-indicator {
-        display: flex;
-        align-items: center;
-        font-size: 14px;
-      }
-      .status-indicator ha-icon {
-        margin-right: 4px;
-        --mdc-icon-size: 16px;
-      }
-      .connected {
-        color: var(--success-color, #0f9d58);
-      }
-      .disconnected {
-        color: var(--error-color, #db4437);
+        text-align: center;
       }
     `;
   }
@@ -142,74 +102,74 @@ class OverseerCard extends LitElement {
       throw new Error("Invalid configuration");
     }
     this.config = {
-      title: "AI Overseer Console",
-      max_items: 10,
-      ...config,
+      title: config.title || "AI Overseer Console",
+      max_items: config.max_items || 10,
     };
   }
 
   getCardSize() {
-    return 5;
+    return 4;
   }
 
   connectedCallback() {
     super.connectedCallback();
-    this._connected = false;
-    this._fetchInsights();
-    this._subscribeToInsights();
+    this._connect();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    this._unsubscribeFromInsights();
+    this._disconnect();
   }
 
-  async _fetchInsights() {
-    if (!this.hass) return;
+  _connect() {
+    if (this._connected || !this.hass) return;
 
-    try {
-      const connection = this.hass.connection;
-      const response = await connection.sendMessagePromise({
-        type: "overseer_agent/insights",
-        count: this.config.max_items || 10,
-      });
-
-      if (response && response.insights) {
-        this.insights = response.insights;
-      }
-    } catch (error) {
-      console.error("Error fetching insights:", error);
-    }
-  }
-
-  _subscribeToInsights() {
-    if (!this.hass || this._connected) return;
-
-    const connection = this.hass.connection;
-    connection.subscribeMessage(
-      (message) => {
-        if (message.insights) {
-          this.insights = message.insights;
-        }
-      },
+    const wsConnection = this.hass.connection;
+    
+    wsConnection.subscribeMessage(
+      (msg) => this._handleMessage(msg),
       { type: "overseer_agent/subscribe" }
     ).then((unsub) => {
       this._unsubscribe = unsub;
       this._connected = true;
-      this.requestUpdate();
+      this._fetchInsights();
     }).catch((err) => {
-      console.error("Error subscribing to insights:", err);
+      console.error("Error subscribing to overseer insights:", err);
       this._connected = false;
-      this.requestUpdate();
     });
   }
 
-  _unsubscribeFromInsights() {
+  _disconnect() {
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
     }
     this._connected = false;
+  }
+
+  _fetchInsights() {
+    if (!this.hass || !this._connected) return;
+
+    this.hass.connection.sendMessagePromise({
+      type: "overseer_agent/insights",
+      count: this.config.max_items
+    }).then((result) => {
+      if (result && result.insights) {
+        this.insights = result.insights;
+      }
+    }).catch((err) => {
+      console.error("Error fetching overseer insights:", err);
+    });
+  }
+
+  _handleMessage(msg) {
+    if (msg && msg.insights) {
+      this.insights = msg.insights.slice(-this.config.max_items);
+    }
+  }
+
+  _refreshInsights() {
+    this._fetchInsights();
   }
 
   _clearInsights() {
@@ -219,96 +179,116 @@ class OverseerCard extends LitElement {
   }
 
   _formatTimestamp(timestamp) {
+    if (!timestamp) return "";
+    
     const date = new Date(timestamp);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
 
-  _getSourceClass(source) {
-    return `source-${source.replace(/\s+/g, '_').toLowerCase()}`;
-  }
-
   _getSourceIcon(source) {
-    const icons = {
-      system: "mdi:cog",
-      event_analysis: "mdi:magnify",
-      query: "mdi:message-question",
-      conversation: "mdi:message-text",
-      entity_analysis: "mdi:eye",
-      domain_analysis: "mdi:database"
-    };
-    
-    return icons[source] || "mdi:information";
+    switch (source) {
+      case "system":
+        return "mdi:cog";
+      case "event_analysis":
+        return "mdi:magnify";
+      case "query":
+        return "mdi:help-circle";
+      case "conversation":
+        return "mdi:message-text";
+      case "entity_analysis":
+        return "mdi:chart-line";
+      case "domain_analysis":
+        return "mdi:view-grid";
+      default:
+        return "mdi:robot";
+    }
   }
 
   _getSourceLabel(source) {
-    const labels = {
-      system: "System",
-      event_analysis: "Analysis",
-      query: "Query",
-      conversation: "Conversation",
-      entity_analysis: "Entity Analysis",
-      domain_analysis: "Domain Analysis"
-    };
-    
-    return labels[source] || source;
+    switch (source) {
+      case "system":
+        return "System";
+      case "event_analysis":
+        return "Event Analysis";
+      case "query":
+        return "Query";
+      case "conversation":
+        return "Conversation";
+      case "entity_analysis":
+        return "Entity Analysis";
+      case "domain_analysis":
+        return "Domain Analysis";
+      default:
+        return source;
+    }
   }
 
   render() {
-    if (!this.hass || !this.config) {
-      return html``;
+    if (!this.hass) {
+      return html`
+        <ha-card>
+          <div class="card-header">
+            <h2>${this.config.title}</h2>
+          </div>
+          <div class="console">
+            <div class="empty-state">
+              <ha-icon icon="mdi:robot-off"></ha-icon>
+              <div>Home Assistant connection not available</div>
+            </div>
+          </div>
+        </ha-card>
+      `;
     }
-
-    const sortedInsights = [...this.insights].sort((a, b) => {
-      return new Date(b.timestamp) - new Date(a.timestamp);
-    }).slice(0, this.config.max_items || 10);
 
     return html`
       <ha-card>
         <div class="card-header">
           <h2>${this.config.title}</h2>
-          <div class="status-indicator ${this._connected ? 'connected' : 'disconnected'}">
-            <ha-icon icon="${this._connected ? 'mdi:wifi' : 'mdi:wifi-off'}"></ha-icon>
-            ${this._connected ? 'Connected' : 'Disconnected'}
+          <div class="actions">
+            <button @click=${this._refreshInsights} title="Refresh">
+              <ha-icon icon="mdi:refresh"></ha-icon>
+            </button>
+            <button @click=${this._clearInsights} title="Clear">
+              <ha-icon icon="mdi:delete"></ha-icon>
+            </button>
           </div>
         </div>
-        
         <div class="console">
-          ${sortedInsights.length === 0 
-            ? html`
-                <div class="empty-state">
-                  <ha-icon icon="mdi:robot-outline"></ha-icon>
-                  <div>No insights available yet. The AI Overseer will share its thoughts here as it monitors your home.</div>
+          ${this.insights.length === 0 ? html`
+            <div class="empty-state">
+              <ha-icon icon="mdi:robot"></ha-icon>
+              <div>No insights available yet</div>
+              ${!this._connected ? html`
+                <div class="connection-error">
+                  Not connected to the Overseer Agent
                 </div>
-              ` 
-            : sortedInsights.map(insight => html`
-                <div class="insight">
-                  <div class="insight-header">
-                    <div class="insight-source ${this._getSourceClass(insight.source)}">
-                      <ha-icon icon="${this._getSourceIcon(insight.source)}"></ha-icon>
-                      ${this._getSourceLabel(insight.source)}
-                    </div>
-                    <div class="insight-timestamp">${this._formatTimestamp(insight.timestamp)}</div>
+              ` : ''}
+            </div>
+          ` : html`
+            ${this.insights.slice().reverse().map((insight) => html`
+              <div class="insight">
+                <div class="insight-header">
+                  <div>
+                    <ha-icon icon="${this._getSourceIcon(insight.source)}"></ha-icon>
+                    ${this._getSourceLabel(insight.source)}
                   </div>
-                  <div class="insight-content">${insight.content}</div>
+                  <div>${this._formatTimestamp(insight.timestamp)}</div>
                 </div>
-              `)
-          }
-        </div>
-        
-        <div class="controls">
-          <button class="secondary" @click="${this._fetchInsights}">
-            <ha-icon icon="mdi:refresh"></ha-icon> Refresh
-          </button>
-          <button @click="${this._clearInsights}">
-            <ha-icon icon="mdi:delete"></ha-icon> Clear
-          </button>
+                <div class="insight-content">${insight.content}</div>
+              </div>
+            `)}
+          `}
         </div>
       </ha-card>
     `;
   }
 }
 
-customElements.define("overseer-card", OverseerCard);
+// Don't define the custom element here, let the card-loader.js handle it
+// This prevents duplicate registration errors
+if (!customElements.get('overseer-card')) {
+  customElements.define("overseer-card", OverseerCard);
+}
 
 window.customCards = window.customCards || [];
 window.customCards.push({

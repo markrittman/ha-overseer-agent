@@ -128,18 +128,66 @@ service: overseer_agent.clear_insights
 
 This integration requires a Google Cloud account with the Vertex AI API enabled:
 
-1. Create a Google Cloud Project
-2. Enable the Vertex AI API
-3. Create a service account with the "Vertex AI User" role
-4. Download the service account key JSON file
-5. Place the JSON file in your Home Assistant config directory
-6. Reference the file path in your configuration
+1. **Create a Google Cloud Project**:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select an existing one
+
+2. **Enable Required APIs**:
+   - In the Cloud Console, go to "APIs & Services" → "Library"
+   - Enable the following APIs:
+     - **Vertex AI API** (`aiplatform.googleapis.com`)
+     - **Cloud Storage API** (`storage.googleapis.com`) - may be required as a dependency
+
+3. **Create Service Account with Required Permissions**:
+   - Go to "IAM & Admin" → "Service Accounts"
+   - Click "Create Service Account"
+   - Enter a name (e.g., "ha-overseer-agent")
+   - Click "Create and Continue"
+   - Assign the following roles:
+     - **Vertex AI User** (`roles/aiplatform.user`) - Required for making inference requests
+     - **Vertex AI Service Agent** (`roles/aiplatform.serviceAgent`) - Required for service account to act on behalf of Vertex AI
+
+4. **Create and Download Key**:
+   - Find your service account in the list
+   - Click the three dots (⋮) menu → "Manage keys"
+   - Click "Add Key" → "Create new key"
+   - Select "JSON" format and download the key file
+
+5. **Add Key to Home Assistant**:
+   - Upload the JSON key file to your Home Assistant configuration directory
+   - Reference it in your configuration as shown above
+
+### Billing Considerations
+
+- Vertex AI requires a billing account to be linked to your Google Cloud project
+- The Gemini 2.0 FLASH model has associated costs based on usage
+- Consider setting up budget alerts to monitor your spending
+
+### Troubleshooting Permission Issues
+
+If you encounter permission errors:
+
+- Check the Home Assistant logs for specific error messages
+- Verify that the service account has the correct roles assigned
+- Ensure the key file is accessible to Home Assistant
+- Confirm that the APIs are enabled in your Google Cloud project
+- Make sure your Google Cloud project has billing enabled
 
 ## Troubleshooting
 
 - Check the Home Assistant logs for errors related to the overseer_agent component
 - Ensure your Google Cloud credentials are valid and have the necessary permissions
 - Make sure the Vertex AI API is enabled in your Google Cloud project
+
+## Compatibility
+
+This integration is compatible with Home Assistant 2023.3.0 and newer. It has been tested with the following versions:
+
+- Home Assistant 2023.3.0
+- Home Assistant 2023.6.0
+- Home Assistant 2023.9.0
+- Home Assistant 2023.12.0
+- Home Assistant 2024.3.0
 
 ## License
 

@@ -6,6 +6,8 @@ import asyncio
 from collections import deque
 import json
 import time
+import os
+import shutil
 
 from homeassistant.core import HomeAssistant, State, Event, Context, callback, ServiceCall
 from homeassistant.helpers.typing import ConfigType
@@ -14,11 +16,17 @@ from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.helpers.entity import Entity
 from homeassistant.components import conversation, websocket_api
 from homeassistant.components.conversation import ConversationInput, ConversationResult
-from homeassistant.components.conversation.agent import AbstractConversationAgent
+try:
+    # For newer versions of Home Assistant
+    from homeassistant.components.conversation.agent import AbstractConversationAgent
+except ImportError:
+    # For older versions of Home Assistant
+    from homeassistant.components.conversation import AbstractConversationAgent
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.websocket_api import websocket_command
 from homeassistant.components.websocket_api.connection import ActiveConnection
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
+from homeassistant.helpers.event import async_call_later
 
 from langchain.llms import VertexAI
 from langchain.agents import initialize_agent, AgentType
@@ -194,7 +202,7 @@ class OverseerAgent:
             
             # Register conversation agent if enabled
             if self.config.get("enable_conversation", True):
-                self._register_conversation_agent()
+                await self._register_conversation_agent()
                 
             # Register services
             self._register_services()
@@ -215,16 +223,19 @@ class OverseerAgent:
             _LOGGER.error(f"Failed to start Overseer Agent: {str(e)}")
             return False
 
-    def _register_conversation_agent(self):
-        """Register this agent as a conversation agent."""
-        self.conversation_agent = OverseerConversationAgent(self)
-        conversation.async_set_agent(
-            self.hass, 
-            DOMAIN, 
-            self.conversation_agent
-        )
-        _LOGGER.info("Registered Overseer Agent as a conversation agent")
-        
+    async def _register_conversation_agent(self):
+        """Register the conversation agent."""
+        try:
+            # Create conversation agent
+            self.conversation_agent = OverseerConversationAgent(self)
+            
+            # Register the agent with Home Assistant
+            await self.conversation_agent.async_register()
+            
+            _LOGGER.info("Registered conversation agent")
+        except Exception as e:
+            _LOGGER.error(f"Failed to register conversation agent: {str(e)}")
+
     def _register_services(self):
         """Register services for the component."""
         self.hass.services.async_register(
@@ -544,12 +555,13 @@ class OverseerAgent:
             _LOGGER.error(f"Error processing conversation query: {str(e)}")
             return "I'm sorry, I encountered an error while processing your request."
 
-class OverseerConversationAgent(AbstractConversationAgent):
+class OverseerConversationAgent:
     """Conversation agent for the Overseer Agent."""
     
-    def __init__(self, overseer_agent: OverseerAgent):
+    def __init__(self, overseer_agent: "OverseerAgent"):
         """Initialize the conversation agent."""
         self.overseer_agent = overseer_agent
+        self.hass = overseer_agent.hass
         
     @property
     def attribution(self) -> Dict[str, Any]:
@@ -558,7 +570,8 @@ class OverseerConversationAgent(AbstractConversationAgent):
             "name": "AI Overseer Agent",
             "icon": "mdi:robot-outline",
         }
-        
+    
+    # For newer versions of Home Assistant
     async def async_process(
         self, user_input: ConversationInput
     ) -> ConversationResult:
@@ -575,7 +588,40 @@ class OverseerConversationAgent(AbstractConversationAgent):
             response=response_text,
             conversation_id=user_input.conversation_id,
         )
-
+    
+    # For older versions of Home Assistant
+    async def async_converse(
+        self, text: str, conversation_id: Optional[str] = None, context: Optional[Context] = None
+    ) -> ConversationResult:
+        """Process a user input and return a response."""
+        response_text = await self.overseer_agent.process_conversation_query(text)
+        
+        # Add to insights
+        self.overseer_agent._add_insight(
+            f"User asked: {text}\nMy response: {response_text}",
+            "conversation"
+        )
+        
+        return ConversationResult(
+            response=response_text,
+            conversation_id=conversation_id,
+        )
+    
+    # For compatibility with all versions
+    async def async_register(self) -> None:
+        """Register this agent."""
+        try:
+            # Try newer method first
+            conversation.async_register_agent(self.hass, self)
+            _LOGGER.info("Registered conversation agent using new API")
+        except (AttributeError, TypeError):
+            try:
+                # Fall back to older method
+                await conversation.async_register(self.hass, self)
+                _LOGGER.info("Registered conversation agent using legacy API")
+            except Exception as e:
+                _LOGGER.error(f"Failed to register conversation agent: {str(e)}")
+                
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Overseer Agent component."""
     conf = config.get(DOMAIN, {})
@@ -593,20 +639,64 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def _register_frontend_resources(hass: HomeAssistant) -> None:
     """Register frontend resources for the custom card."""
     try:
+        # Copy the JS files to the www directory
+        www_dir = hass.config.path("www")
+        overseer_dir = os.path.join(www_dir, "overseer-agent")
+        
+        if not os.path.exists(overseer_dir):
+            os.makedirs(overseer_dir, exist_ok=True)
+            
+        # Get the path to the JS files in our component
+        component_dir = os.path.dirname(os.path.abspath(__file__))
+        js_files = [
+            ("www/overseer-card.js", "overseer-card.js"),
+            ("www/card-loader.js", "card-loader.js")
+        ]
+        
+        # Copy the files
+        for src_rel_path, dest_filename in js_files:
+            src_path = os.path.join(component_dir, src_rel_path)
+            dest_path = os.path.join(overseer_dir, dest_filename)
+            
+            if os.path.exists(src_path) and not os.path.exists(dest_path):
+                shutil.copy2(src_path, dest_path)
+                _LOGGER.info(f"Copied {dest_filename} to {dest_path}")
+        
+        # Register the resources
         resources = ResourceStorageCollection(hass)
         await resources.async_get_info()
         
-        # Check if our resource is already registered
-        for resource in resources.async_items():
-            if resource["url"].endswith("overseer-card.js"):
-                return
-                
-        # Register the resource
-        await resources.async_create_item({
-            "res_type": "module",
-            "url": "/local/overseer-agent/overseer-card.js"
-        })
+        # Check if our resources are already registered
+        resource_urls = [
+            "/local/overseer-agent/overseer-card.js",
+            "/local/overseer-agent/card-loader.js"
+        ]
         
-        _LOGGER.info("Registered Overseer Card frontend resource")
+        for resource_url in resource_urls:
+            resource_exists = False
+            for resource in resources.async_items():
+                if resource["url"] == resource_url:
+                    _LOGGER.info(f"Resource {resource_url} already registered")
+                    resource_exists = True
+                    break
+                    
+            if not resource_exists:
+                try:
+                    await resources.async_create_item({
+                        "res_type": "module",
+                        "url": resource_url
+                    })
+                    _LOGGER.info(f"Registered resource {resource_url}")
+                except Exception as e:
+                    _LOGGER.error(f"Failed to register resource {resource_url}: {str(e)}")
+            
+        # Schedule a reload of lovelace to pick up the new resources
+        async def reload_lovelace(_now=None):
+            """Reload lovelace to pick up the new resources."""
+            await hass.services.async_call("lovelace", "reload_resources", {})
+            _LOGGER.info("Reloaded Lovelace resources")
+            
+        async_call_later(hass, 10, reload_lovelace)
+            
     except Exception as e:
         _LOGGER.error(f"Failed to register frontend resources: {str(e)}")
