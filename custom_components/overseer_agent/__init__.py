@@ -50,6 +50,14 @@ try:
     except (ImportError, DeprecationWarning):
         from langchain_core.memory import ConversationBufferMemory
         _LOGGER.info("Using langchain_core.memory.ConversationBufferMemory")
+    
+    # Import tool creation functions
+    try:
+        from langchain.tools import Tool
+        _LOGGER.info("Using langchain.tools.Tool")
+    except ImportError:
+        from langchain_core.tools import Tool
+        _LOGGER.info("Using langchain_core.tools.Tool")
         
     from langchain.tools import BaseTool
     from langchain.chains import LLMChain
@@ -61,7 +69,7 @@ except ImportError:
         from langchain.llms import VertexAI
         from langchain.agents import initialize_agent, AgentType
         from langchain.memory import ConversationBufferMemory
-        from langchain.tools import BaseTool
+        from langchain.tools import BaseTool, Tool
         from langchain.chains import LLMChain
         from langchain.prompts import PromptTemplate
         _LOGGER.info("Using older LangChain API (< 0.1.0)")
@@ -72,6 +80,7 @@ except ImportError:
         AgentType = None
         ConversationBufferMemory = None
         BaseTool = None
+        Tool = None
         LLMChain = None
         PromptTemplate = None
 
@@ -122,67 +131,65 @@ class InsightEntry:
             "timestamp": self.timestamp.isoformat(),
         }
 
-def create_state_summary_tool(state_history: Dict[str, Any]) -> BaseTool:
-    """Create a state summary tool that's compatible with both Pydantic v1 and v2."""
+def create_state_summary_tool(state_history: Dict[str, Any]) -> Tool:
+    """Create a state summary tool using the Tool factory function."""
     
-    class CustomStateSummaryTool(BaseTool):
-        """Tool for summarizing the current state of the smart home."""
-        
-        name = "state_summary"
-        description = "Summarize the current state of the smart home system and its devices"
-        
-        def _run(self, query: str) -> str:
-            """Summarize the current state."""
-            summaries = []
-            for entity_id, state_data in state_history.items():
-                summaries.append(f"{entity_id}: {state_data['state']}")
-            return "\n".join(summaries)
-
-        async def _arun(self, query: str) -> str:
-            """Run async version."""
-            return self._run(query)
+    def _run_tool(query: str) -> str:
+        """Summarize the current state."""
+        summaries = []
+        for entity_id, state_data in state_history.items():
+            summaries.append(f"{entity_id}: {state_data['state']}")
+        return "\n".join(summaries)
     
-    return CustomStateSummaryTool()
-
-
-def create_entity_query_tool(state_history: Dict[str, Any], hass: HomeAssistant) -> BaseTool:
-    """Create an entity query tool that's compatible with both Pydantic v1 and v2."""
+    async def _arun_tool(query: str) -> str:
+        """Run async version."""
+        return _run_tool(query)
     
-    class CustomEntityQueryTool(BaseTool):
-        """Tool for querying specific entities or domains."""
-        
-        name = "entity_query"
-        description = "Get detailed information about specific entities or domains in the smart home"
-        
-        def _run(self, query: str) -> str:
-            """Get detailed information about specific entities or domains."""
-            # Extract entity_id or domain from query
-            entity_id = query.strip().lower()
-            
-            # Check if it's a specific entity
-            if entity_id in state_history:
-                state_data = state_history[entity_id]
-                return f"Entity: {entity_id}\nState: {state_data['state']}\nAttributes: {state_data['attributes']}"
-            
-            # Check if it's a domain
-            domain_entities = {}
-            for eid, state_data in state_history.items():
-                if eid.startswith(entity_id + "."):
-                    domain_entities[eid] = state_data
-            
-            if domain_entities:
-                result = [f"Domain: {entity_id}"]
-                for eid, state_data in domain_entities.items():
-                    result.append(f"  {eid}: {state_data['state']}")
-                return "\n".join(result)
-            
-            return f"No entity or domain found matching '{entity_id}'"
+    return Tool(
+        name="state_summary",
+        description="Summarize the current state of the smart home system and its devices",
+        func=_run_tool,
+        coroutine=_arun_tool,
+    )
 
-        async def _arun(self, query: str) -> str:
-            """Run async version."""
-            return self._run(query)
+
+def create_entity_query_tool(state_history: Dict[str, Any], hass: HomeAssistant) -> Tool:
+    """Create an entity query tool using the Tool factory function."""
     
-    return CustomEntityQueryTool()
+    def _run_tool(query: str) -> str:
+        """Get detailed information about specific entities or domains."""
+        # Extract entity_id or domain from query
+        entity_id = query.strip().lower()
+        
+        # Check if it's a specific entity
+        if entity_id in state_history:
+            state_data = state_history[entity_id]
+            return f"Entity: {entity_id}\nState: {state_data['state']}\nAttributes: {state_data['attributes']}"
+        
+        # Check if it's a domain
+        domain_entities = {}
+        for eid, state_data in state_history.items():
+            if eid.startswith(entity_id + "."):
+                domain_entities[eid] = state_data
+        
+        if domain_entities:
+            result = [f"Domain: {entity_id}"]
+            for eid, state_data in domain_entities.items():
+                result.append(f"  {eid}: {state_data['state']}")
+            return "\n".join(result)
+        
+        return f"No entity or domain found matching '{entity_id}'"
+    
+    async def _arun_tool(query: str) -> str:
+        """Run async version."""
+        return _run_tool(query)
+    
+    return Tool(
+        name="entity_query",
+        description="Get detailed information about specific entities or domains in the smart home",
+        func=_run_tool,
+        coroutine=_arun_tool,
+    )
 
 class OverseerAgent:
     """Main class for the Overseer Agent."""
