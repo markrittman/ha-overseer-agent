@@ -179,6 +179,25 @@ If you encounter permission errors:
 - Ensure your Google Cloud credentials are valid and have the necessary permissions
 - Make sure the Vertex AI API is enabled in your Google Cloud project
 
+### Common Issues
+
+#### "Integration was not setup via the UI" Message
+
+If you see a message saying "This integration was not setup via the UI, you have either set it up in YAML or it is a dependency set up by another integration," this is normal behavior. Since the Overseer Agent is configured in your `configuration.yaml` file, it cannot be configured through the UI. This message is informational, not an error.
+
+To verify the integration is working correctly:
+1. Check if the Overseer Agent services are available in the Services tab of Developer Tools
+2. Try using the conversation component to ask about your home
+3. Look for insights being generated in the Lovelace card (if installed)
+
+#### Google Cloud Credentials Issues
+
+If you see errors related to Google Cloud credentials:
+1. Ensure the credentials file exists at the path specified in your configuration
+2. Verify the project ID matches your Google Cloud project
+3. Check that the service account has the necessary permissions for Vertex AI
+4. Make sure the Vertex AI API is enabled and billing is set up for your project
+
 ## Compatibility
 
 This integration is compatible with Home Assistant 2023.3.0 and newer. It has been tested with the following versions:
