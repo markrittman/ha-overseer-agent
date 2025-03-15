@@ -1,0 +1,14 @@
+{
+  "domain": "overseer_agent",
+  "name": "AI Overseer Agent",
+  "documentation": "https://github.com/your-username/hacs-homeassistant-overseer",
+  "dependencies": ["conversation"],
+  "codeowners": [],
+  "requirements": [
+    "langchain>=0.1.0",
+    "google-cloud-aiplatform>=1.25.0"
+  ],
+  "config_flow": false,
+  "iot_class": "cloud_push",
+  "version": "1.0.0"
+}
