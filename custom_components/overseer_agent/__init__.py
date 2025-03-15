@@ -229,23 +229,26 @@ class OverseerAgent:
             
             # Initialize the memory
             try:
-                # Try newer memory API
+                # Try newer memory API with ChatMessageHistory
                 from langchain_core.memory import ChatMessageHistory
-                from langchain_core.messages import HumanMessage, AIMessage
-                
-                # Initialize with the newer API
-                message_history = ChatMessageHistory()
+                chat_memory = ChatMessageHistory()
                 self.memory = ConversationBufferMemory(
-                    chat_memory=message_history,
-                    return_messages=True
+                    chat_memory=chat_memory,
+                    return_messages=True,
+                    memory_key="chat_history"
                 )
-                _LOGGER.info("Using newer memory API")
+                _LOGGER.info("Using newer memory API with ChatMessageHistory")
             except ImportError:
                 # Fall back to older memory API
-                self.memory = ConversationBufferMemory(return_messages=True)
+                self.memory = ConversationBufferMemory(
+                    return_messages=True,
+                    memory_key="chat_history"
+                )
                 _LOGGER.info("Using older memory API")
             
             # Initialize the agent
+            # Note: LangChain agents are deprecated in favor of LangGraph.
+            # We'll continue using agents for now, but plan to migrate to LangGraph in a future version.
             self.agent = initialize_agent(
                 tools=tools,
                 llm=self.llm,
@@ -374,6 +377,7 @@ class OverseerAgent:
         """Handle state change events."""
         entity_id = event.data.get("entity_id")
         
+        # Check if we should track this entity
         if not self.should_track_entity(entity_id):
             return
             
@@ -389,11 +393,14 @@ class OverseerAgent:
         }
         
         # Add to processing queue
+        old_state = event.data.get("old_state")
+        previous_state = old_state.state if old_state else None
+        
         await self.event_queue.put({
             "type": "state_changed",
             "entity_id": entity_id,
             "state": new_state.state,
-            "previous_state": event.data.get("old_state", {}).get("state"),
+            "previous_state": previous_state,
             "timestamp": new_state.last_changed.isoformat()
         })
 
@@ -413,7 +420,7 @@ class OverseerAgent:
 
                 # Analyze events with the LLM
                 event_descriptions = "\n".join(
-                    f"Entity {e['entity_id']} changed from {e['previous_state']} to {e['state']}"
+                    f"Entity {e['entity_id']} changed from {e.get('previous_state', 'unknown')} to {e['state']}"
                     for e in events
                 )
                 
@@ -496,6 +503,114 @@ class OverseerAgent:
             _LOGGER.error(f"Error processing conversation query: {str(e)}")
             return "I'm sorry, I encountered an error while processing your request."
 
+    async def _handle_query_service(self, call):
+        """Handle the query service call."""
+        query = call.data.get("query")
+        if not query:
+            return
+            
+        try:
+            response = await self.hass.async_add_executor_job(
+                self.process_conversation_query, query
+            )
+            
+            # Add insight
+            self._add_insight(
+                f"Query: {query}\nResponse: {response}",
+                "service"
+            )
+        except Exception as e:
+            _LOGGER.error(f"Error processing query: {str(e)}")
+            
+    async def _handle_analyze_entity_service(self, call):
+        """Handle the analyze entity service call."""
+        entity_id = call.data.get("entity_id")
+        if not entity_id:
+            return
+            
+        try:
+            # Get entity state
+            state = self.hass.states.get(entity_id)
+            if not state:
+                _LOGGER.warning(f"Entity {entity_id} not found")
+                return
+                
+            # Create query about the entity
+            query = f"Analyze the state and behavior of {entity_id}. Current state: {state.state}"
+            
+            # Process with LLM
+            response = await self.hass.async_add_executor_job(
+                self.process_conversation_query, query
+            )
+            
+            # Add insight
+            self._add_insight(
+                f"Analysis of {entity_id}: {response}",
+                "service"
+            )
+        except Exception as e:
+            _LOGGER.error(f"Error analyzing entity: {str(e)}")
+            
+    async def _handle_analyze_domain_service(self, call):
+        """Handle the analyze domain service call."""
+        domain = call.data.get("domain")
+        if not domain:
+            return
+            
+        try:
+            # Get all entities in the domain
+            entities = []
+            for entity_id in self.hass.states.async_entity_ids(domain):
+                state = self.hass.states.get(entity_id)
+                if state:
+                    entities.append(f"{entity_id}: {state.state}")
+                    
+            if not entities:
+                _LOGGER.warning(f"No entities found in domain {domain}")
+                return
+                
+            # Create query about the domain
+            entity_list = "\n".join(entities[:10])  # Limit to 10 entities to avoid token limits
+            query = f"Analyze the state and behavior of the {domain} domain. Entities:\n{entity_list}"
+            
+            # Process with LLM
+            response = await self.hass.async_add_executor_job(
+                self.process_conversation_query, query
+            )
+            
+            # Add insight
+            self._add_insight(
+                f"Analysis of {domain} domain: {response}",
+                "service"
+            )
+        except Exception as e:
+            _LOGGER.error(f"Error analyzing domain: {str(e)}")
+            
+    async def _handle_clear_insights_service(self, call):
+        """Handle the clear insights service call."""
+        try:
+            # Clear insights
+            self.insights.clear()
+            
+            # Update the state entity
+            self.hass.states.async_set(
+                f"{DOMAIN}.insights",
+                "active",
+                {
+                    "last_insight": "",
+                    "source": "system",
+                    "timestamp": datetime.now().isoformat(),
+                    "count": 0
+                }
+            )
+            
+            # Notify subscribers
+            self._notify_subscribers()
+            
+            _LOGGER.info("Cleared all insights")
+        except Exception as e:
+            _LOGGER.error(f"Error clearing insights: {str(e)}")
+
 class OverseerConversationAgent:
     """Conversation agent for the Overseer Agent."""
     
@@ -505,63 +620,62 @@ class OverseerConversationAgent:
         self.hass = overseer_agent.hass
         
     @property
-    def attribution(self) -> Dict[str, Any]:
+    def attribution(self):
         """Return attribution."""
-        return {
-            "name": "AI Overseer Agent",
-            "icon": "mdi:robot-outline",
-        }
-    
-    # For newer versions of Home Assistant
-    async def async_process(
-        self, user_input: ConversationInput
-    ) -> ConversationResult:
-        """Process a user input and return a response."""
-        response_text = await self.overseer_agent.process_conversation_query(user_input.text)
+        return {"name": "Overseer Agent", "icon": "mdi:robot-outline"}
         
-        # Add to insights
-        self.overseer_agent._add_insight(
-            f"User asked: {user_input.text}\nMy response: {response_text}",
-            "conversation"
+    async def async_process(
+            self, user_input: ConversationInput
+        ) -> ConversationResult:
+        """Process a user input and return a response."""
+        text = user_input.text
+        response = await self.hass.async_add_executor_job(
+            self.overseer_agent.process_conversation_query, text
         )
         
         return ConversationResult(
-            response=response_text,
+            response=response,
             conversation_id=user_input.conversation_id,
         )
-    
-    # For older versions of Home Assistant
-    async def async_converse(
-        self, text: str, conversation_id: Optional[str] = None, context: Optional[Context] = None
-    ) -> ConversationResult:
-        """Process a user input and return a response."""
-        response_text = await self.overseer_agent.process_conversation_query(text)
         
-        # Add to insights
-        self.overseer_agent._add_insight(
-            f"User asked: {text}\nMy response: {response_text}",
-            "conversation"
+    async def async_converse(
+            self, text: str, conversation_id: Optional[str] = None, context: Optional[Context] = None
+        ) -> ConversationResult:
+        """Process a user input and return a response."""
+        response = await self.hass.async_add_executor_job(
+            self.overseer_agent.process_conversation_query, text
         )
         
         return ConversationResult(
-            response=response_text,
+            response=response,
             conversation_id=conversation_id,
         )
-    
-    # For compatibility with all versions
-    async def async_register(self) -> None:
+        
+    async def async_register(self):
         """Register this agent."""
         try:
-            # Try newer method first
-            conversation.async_register_agent(self.hass, self)
-            _LOGGER.info("Registered conversation agent using new API")
-        except (AttributeError, TypeError):
+            # Try newer registration method first
             try:
-                # Fall back to older method
-                await conversation.async_register(self.hass, self)
-                _LOGGER.info("Registered conversation agent using legacy API")
-            except Exception as e:
-                _LOGGER.error(f"Failed to register conversation agent: {str(e)}")
+                from homeassistant.components.conversation import async_register
+                await async_register(self.hass, self)
+                _LOGGER.info("Registered conversation agent using newer API")
+                return
+            except (ImportError, AttributeError):
+                pass
+                
+            # Try older registration method
+            try:
+                from homeassistant.components.conversation import async_register_agent
+                async_register_agent(self.hass, self)
+                _LOGGER.info("Registered conversation agent using older API")
+                return
+            except (ImportError, AttributeError):
+                pass
+                
+            # If we get here, neither method worked
+            _LOGGER.warning("Could not register conversation agent - conversation component API has changed")
+        except Exception as e:
+            _LOGGER.error(f"Failed to register conversation agent: {str(e)}")
                 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Overseer Agent component."""
