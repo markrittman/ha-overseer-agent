@@ -8,6 +8,7 @@ import json
 import time
 import os
 import shutil
+from pydantic import Field
 
 from homeassistant.core import HomeAssistant, State, Event, Context, callback, ServiceCall
 from homeassistant.helpers.typing import ConfigType
@@ -126,6 +127,7 @@ class StateSummaryTool(BaseTool):
     
     name: str = "state_summary"
     description: str = "Summarize the current state of the smart home system and its devices"
+    state_history: Dict[str, Any] = Field(exclude=True)
 
     def __init__(self, state_history: Dict[str, Any]):
         self.state_history = state_history
@@ -147,6 +149,8 @@ class EntityQueryTool(BaseTool):
     
     name: str = "entity_query"
     description: str = "Get detailed information about specific entities or domains in the smart home"
+    state_history: Dict[str, Any] = Field(exclude=True)
+    hass: HomeAssistant = Field(exclude=True)
 
     def __init__(self, state_history: Dict[str, Any], hass: HomeAssistant):
         self.state_history = state_history
