@@ -213,13 +213,17 @@ class OverseerAgent:
         """Start the overseer agent."""
         try:
             # Initialize Vertex AI
-            self.llm = VertexAI(
-                project=self.config["google_cloud_project_id"],
-                credentials_path=self.config["google_cloud_credentials"],
-                model_name="gemini-2.0-flash",
-                temperature=0.1,
-                max_output_tokens=1024
-            )
+            try:
+                self.llm = VertexAI(
+                    project=self.config["google_cloud_project_id"],
+                    credentials_path=self.config["google_cloud_credentials"],
+                    model_name="gemini-2.0-flash",
+                    temperature=0.1,
+                    max_output_tokens=1024
+                )
+            except Exception as e:
+                _LOGGER.error(f"Failed to initialize VertexAI: {str(e)}")
+                raise
             
             # Initialize tools
             tools = [
@@ -249,13 +253,17 @@ class OverseerAgent:
             # Initialize the agent
             # Note: LangChain agents are deprecated in favor of LangGraph.
             # We'll continue using agents for now, but plan to migrate to LangGraph in a future version.
-            self.agent = initialize_agent(
-                tools=tools,
-                llm=self.llm,
-                agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
-                memory=self.memory,
-                verbose=True
-            )
+            try:
+                self.agent = initialize_agent(
+                    tools=tools,
+                    llm=self.llm,
+                    agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
+                    memory=self.memory,
+                    verbose=True
+                )
+            except Exception as e:
+                _LOGGER.error(f"Failed to initialize agent: {str(e)}")
+                raise
             
             # Start listening for state changes
             self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._handle_state_change)
@@ -285,6 +293,8 @@ class OverseerAgent:
             
         except Exception as e:
             _LOGGER.error(f"Failed to start Overseer Agent: {str(e)}")
+            import traceback
+            _LOGGER.error(f"Traceback: {traceback.format_exc()}")
             return False
 
     async def _register_conversation_agent(self):
@@ -360,6 +370,29 @@ class OverseerAgent:
         )
         
         _LOGGER.info("Registered Overseer Agent websocket commands")
+
+    async def _handle_websocket_insights(self, hass, connection, msg):
+        """Handle websocket requests for insights."""
+        connection.send_result(msg["id"])
+        
+        # Add this connection to subscribers
+        self.subscribers.add(connection)
+        
+        # Send current insights
+        count = msg.get("count", MAX_INSIGHT_ITEMS)
+        insights = list(self.insights)[-count:]
+        
+        connection.send_message(
+            websocket_api.event_message(
+                msg["id"],
+                {"insights": [insight.as_dict() for insight in insights]}
+            )
+        )
+        
+        # Remove connection when it's closed
+        @connection.async_remove
+        async def unsub():
+            self.subscribers.remove(connection)
 
     def should_track_entity(self, entity_id: str) -> bool:
         """Determine if an entity should be tracked based on configuration."""
@@ -442,11 +475,17 @@ class OverseerAgent:
                 )
                 
                 try:
-                    analysis = await self.agent.arun(prompt)
+                    # Use async_add_executor_job to run the agent in a separate thread
+                    # This prevents blocking the event loop
+                    analysis = await self.hass.async_add_executor_job(
+                        self.agent.run, prompt
+                    )
                     _LOGGER.info(f"Event Analysis: {analysis}")
                     
                     # Add to insights
-                    self._add_insight(analysis, "event_analysis")
+                    self._add_insight(
+                        analysis, "event_analysis"
+                    )
                     
                 except Exception as e:
                     _LOGGER.error(f"Failed to analyze events: {str(e)}")
@@ -486,7 +525,7 @@ class OverseerAgent:
                 )
             )
                 
-    async def process_conversation_query(self, text: str) -> str:
+    def process_conversation_query(self, text: str) -> str:
         """Process a conversation query and return a response."""
         try:
             # Enhance the query with context about what the agent can do
@@ -497,7 +536,9 @@ class OverseerAgent:
                 "the current state of devices if needed."
             )
             
-            response = await self.agent.arun(enhanced_query)
+            # Use run instead of arun to avoid blocking the event loop
+            # This method is called from async_add_executor_job in _handle_query_service
+            response = self.agent.run(enhanced_query)
             return response
         except Exception as e:
             _LOGGER.error(f"Error processing conversation query: {str(e)}")
@@ -660,8 +701,8 @@ class OverseerConversationAgent:
                 await async_register(self.hass, self)
                 _LOGGER.info("Registered conversation agent using newer API")
                 return
-            except (ImportError, AttributeError):
-                pass
+            except (ImportError, AttributeError) as e:
+                _LOGGER.debug(f"Could not register with newer API: {str(e)}")
                 
             # Try older registration method
             try:
@@ -669,13 +710,23 @@ class OverseerConversationAgent:
                 async_register_agent(self.hass, self)
                 _LOGGER.info("Registered conversation agent using older API")
                 return
-            except (ImportError, AttributeError):
-                pass
+            except (ImportError, AttributeError) as e:
+                _LOGGER.debug(f"Could not register with older API: {str(e)}")
                 
-            # If we get here, neither method worked
-            _LOGGER.warning("Could not register conversation agent - conversation component API has changed")
+            # Try even older method
+            try:
+                from homeassistant.components.conversation.agent import AbstractConversationAgent
+                if isinstance(self, AbstractConversationAgent):
+                    from homeassistant.components.conversation import async_set_agent
+                    async_set_agent(self.hass, self)
+                    _LOGGER.info("Registered conversation agent using legacy API")
+                    return
+            except (ImportError, AttributeError) as e:
+                _LOGGER.debug(f"Could not register with legacy API: {str(e)}")
+                
+            _LOGGER.error("Could not register conversation agent - conversation component API has changed")
         except Exception as e:
-            _LOGGER.error(f"Failed to register conversation agent: {str(e)}")
+            _LOGGER.error(f"Error registering conversation agent: {str(e)}")
                 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Overseer Agent component."""
