@@ -24,19 +24,36 @@ except ImportError:
     from homeassistant.components.conversation import AbstractConversationAgent
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.websocket_api import websocket_command
-from homeassistant.components.websocket_api.connection import ActiveConnection
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.helpers.event import async_call_later
+
+DOMAIN = "overseer_agent"
+_LOGGER = logging.getLogger(__name__)
 
 # Handle different versions of LangChain
 try:
     # For newer versions of LangChain (>= 0.1.0)
-    from langchain_community.llms import VertexAI
+    # Import VertexAI from the dedicated package
+    try:
+        from langchain_google_vertexai import VertexAI
+        _LOGGER.info("Using langchain_google_vertexai for VertexAI")
+    except ImportError:
+        from langchain_community.llms import VertexAI
+        _LOGGER.info("Using langchain_community for VertexAI")
+        
     from langchain.agents import initialize_agent, AgentType
-    from langchain.memory import ConversationBufferMemory
+    # Use newer memory imports
+    try:
+        from langchain.memory import ConversationBufferMemory
+        _LOGGER.info("Using legacy ConversationBufferMemory")
+    except (ImportError, DeprecationWarning):
+        from langchain_core.memory import ConversationBufferMemory
+        _LOGGER.info("Using langchain_core.memory.ConversationBufferMemory")
+        
     from langchain.tools import BaseTool
     from langchain.chains import LLMChain
     from langchain.prompts import PromptTemplate
+    _LOGGER.info("Using newer LangChain API (>= 0.1.0)")
 except ImportError:
     try:
         # For older versions of LangChain (< 0.1.0)
@@ -46,8 +63,8 @@ except ImportError:
         from langchain.tools import BaseTool
         from langchain.chains import LLMChain
         from langchain.prompts import PromptTemplate
+        _LOGGER.info("Using older LangChain API (< 0.1.0)")
     except ImportError:
-        _LOGGER = logging.getLogger(__name__)
         _LOGGER.error("Failed to import LangChain. Make sure it's installed correctly.")
         VertexAI = None
         initialize_agent = None
@@ -56,11 +73,6 @@ except ImportError:
         BaseTool = None
         LLMChain = None
         PromptTemplate = None
-        DOMAIN = "overseer_agent"
-else:
-    DOMAIN = "overseer_agent"
-    _LOGGER = logging.getLogger(__name__)
-    _LOGGER.info("Using newer LangChain API (>= 0.1.0)")
 
 # Service constants
 SERVICE_QUERY = "query"
@@ -184,7 +196,7 @@ class OverseerAgent:
         self.processing = False
         self.llm = None
         self.agent = None
-        self.memory = ConversationBufferMemory(return_messages=True)
+        self.memory = None
         self.conversation_agent = None
         self.insights: Deque[InsightEntry] = deque(maxlen=config.get("max_insights", MAX_INSIGHT_ITEMS))
         self.subscribers = set()
@@ -207,6 +219,24 @@ class OverseerAgent:
                 StateSummaryTool(self.state_history),
                 EntityQueryTool(self.state_history, self.hass)
             ]
+            
+            # Initialize the memory
+            try:
+                # Try newer memory API
+                from langchain_core.memory import ChatMessageHistory
+                from langchain_core.messages import HumanMessage, AIMessage
+                
+                # Initialize with the newer API
+                message_history = ChatMessageHistory()
+                self.memory = ConversationBufferMemory(
+                    chat_memory=message_history,
+                    return_messages=True
+                )
+                _LOGGER.info("Using newer memory API")
+            except ImportError:
+                # Fall back to older memory API
+                self.memory = ConversationBufferMemory(return_messages=True)
+                _LOGGER.info("Using older memory API")
             
             # Initialize the agent
             self.agent = initialize_agent(
@@ -548,7 +578,7 @@ async def _register_frontend_resources(hass: HomeAssistant) -> None:
         overseer_dir = os.path.join(www_dir, "overseer-agent")
         
         if not os.path.exists(overseer_dir):
-            os.makedirs(overseer_dir, exist_ok=True)
+            await hass.async_add_executor_job(os.makedirs, overseer_dir, exist_ok=True)
             
         # Get the path to the JS files in our component
         component_dir = os.path.dirname(os.path.abspath(__file__))
@@ -557,17 +587,30 @@ async def _register_frontend_resources(hass: HomeAssistant) -> None:
             ("www/card-loader.js", "card-loader.js")
         ]
         
-        # Copy the files
+        # Copy the files using async executor to avoid blocking
         for src_rel_path, dest_filename in js_files:
             src_path = os.path.join(component_dir, src_rel_path)
             dest_path = os.path.join(overseer_dir, dest_filename)
             
             if os.path.exists(src_path) and not os.path.exists(dest_path):
-                shutil.copy2(src_path, dest_path)
+                await hass.async_add_executor_job(
+                    shutil.copy2, src_path, dest_path
+                )
                 _LOGGER.info(f"Copied {dest_filename} to {dest_path}")
         
         # Register the resources
-        resources = ResourceStorageCollection(hass)
+        try:
+            # For newer Home Assistant versions
+            resources = ResourceStorageCollection(hass, "lovelace")
+        except TypeError:
+            # For older Home Assistant versions
+            try:
+                from homeassistant.components.lovelace import ResourceStorageCollection as OldResourceStorageCollection
+                resources = OldResourceStorageCollection(hass)
+            except (ImportError, TypeError):
+                _LOGGER.error("Failed to initialize ResourceStorageCollection. Lovelace resources will not be registered.")
+                return
+                
         await resources.async_get_info()
         
         # Check if our resources are already registered

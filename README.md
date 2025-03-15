@@ -189,6 +189,22 @@ This integration is compatible with Home Assistant 2023.3.0 and newer. It has be
 - Home Assistant 2023.12.0
 - Home Assistant 2024.3.0
 
+### LangChain Compatibility
+
+This integration supports both older and newer versions of LangChain:
+- For LangChain < 0.1.0: Uses the original module structure
+- For LangChain >= 0.1.0: Uses the new module structure with `langchain_community` and `langchain_google_vertexai`
+
+### Home Assistant Compatibility
+
+This integration supports different versions of Home Assistant:
+- Works with both older and newer conversation API implementations
+- Handles different versions of the Lovelace resource registration API
+
+### Pydantic Compatibility
+
+This integration is compatible with Pydantic v2, which is used by newer versions of LangChain.
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
