@@ -112,8 +112,8 @@ class InsightEntry:
 class StateSummaryTool(BaseTool):
     """Tool for summarizing the current state of the smart home."""
     
-    name = "state_summary"
-    description = "Summarize the current state of the smart home system and its devices"
+    name: str = "state_summary"
+    description: str = "Summarize the current state of the smart home system and its devices"
 
     def __init__(self, state_history: Dict[str, Any]):
         self.state_history = state_history
@@ -133,8 +133,8 @@ class StateSummaryTool(BaseTool):
 class EntityQueryTool(BaseTool):
     """Tool for querying specific entities or domains."""
     
-    name = "entity_query"
-    description = "Get detailed information about specific entities or domains in the smart home"
+    name: str = "entity_query"
+    description: str = "Get detailed information about specific entities or domains in the smart home"
 
     def __init__(self, state_history: Dict[str, Any], hass: HomeAssistant):
         self.state_history = state_history
