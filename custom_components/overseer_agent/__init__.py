@@ -122,71 +122,67 @@ class InsightEntry:
             "timestamp": self.timestamp.isoformat(),
         }
 
-class StateSummaryTool(BaseTool):
-    """Tool for summarizing the current state of the smart home."""
+def create_state_summary_tool(state_history: Dict[str, Any]) -> BaseTool:
+    """Create a state summary tool that's compatible with both Pydantic v1 and v2."""
     
-    name: str = "state_summary"
-    description: str = "Summarize the current state of the smart home system and its devices"
-    state_history: Dict[str, Any] = Field(exclude=True)
+    class CustomStateSummaryTool(BaseTool):
+        """Tool for summarizing the current state of the smart home."""
+        
+        name = "state_summary"
+        description = "Summarize the current state of the smart home system and its devices"
+        
+        def _run(self, query: str) -> str:
+            """Summarize the current state."""
+            summaries = []
+            for entity_id, state_data in state_history.items():
+                summaries.append(f"{entity_id}: {state_data['state']}")
+            return "\n".join(summaries)
 
-    def __init__(self, state_history: Dict[str, Any]):
-        self.state_history = state_history
-        super().__init__()
-
-    def _run(self, query: str) -> str:
-        """Summarize the current state."""
-        summaries = []
-        for entity_id, state_data in self.state_history.items():
-            summaries.append(f"{entity_id}: {state_data['state']}")
-        return "\n".join(summaries)
-
-    async def _arun(self, query: str) -> str:
-        """Run async version."""
-        return self._run(query)
-
-class EntityQueryTool(BaseTool):
-    """Tool for querying specific entities or domains."""
+        async def _arun(self, query: str) -> str:
+            """Run async version."""
+            return self._run(query)
     
-    name: str = "entity_query"
-    description: str = "Get detailed information about specific entities or domains in the smart home"
-    state_history: Dict[str, Any] = Field(exclude=True)
-    hass: HomeAssistant = Field(exclude=True)
+    return CustomStateSummaryTool()
 
-    def __init__(self, state_history: Dict[str, Any], hass: HomeAssistant):
-        self.state_history = state_history
-        self.hass = hass
-        super().__init__()
 
-    def _run(self, query: str) -> str:
-        """Query specific entities or domains."""
-        parts = query.split()
-        if not parts:
-            return "Please specify an entity ID or domain to query."
+def create_entity_query_tool(state_history: Dict[str, Any], hass: HomeAssistant) -> BaseTool:
+    """Create an entity query tool that's compatible with both Pydantic v1 and v2."""
+    
+    class CustomEntityQueryTool(BaseTool):
+        """Tool for querying specific entities or domains."""
+        
+        name = "entity_query"
+        description = "Get detailed information about specific entities or domains in the smart home"
+        
+        def _run(self, query: str) -> str:
+            """Get detailed information about specific entities or domains."""
+            # Extract entity_id or domain from query
+            entity_id = query.strip().lower()
             
-        target = parts[0].lower()
-        
-        # Check if querying a specific entity
-        if target in self.state_history:
-            entity_data = self.state_history[target]
-            return f"Entity: {target}\nState: {entity_data['state']}\nLast Changed: {entity_data['last_changed']}\nAttributes: {entity_data['attributes']}"
-        
-        # Check if querying a domain
-        domain_entities = [
-            (entity_id, data) for entity_id, data in self.state_history.items()
-            if entity_id.split('.')[0] == target
-        ]
-        
-        if domain_entities:
-            results = [f"Domain: {target} - {len(domain_entities)} entities found:"]
-            for entity_id, data in domain_entities:
-                results.append(f"- {entity_id}: {data['state']}")
-            return "\n".join(results)
+            # Check if it's a specific entity
+            if entity_id in state_history:
+                state_data = state_history[entity_id]
+                return f"Entity: {entity_id}\nState: {state_data['state']}\nAttributes: {state_data['attributes']}"
             
-        return f"No entities found matching '{target}'."
+            # Check if it's a domain
+            domain_entities = {}
+            for eid, state_data in state_history.items():
+                if eid.startswith(entity_id + "."):
+                    domain_entities[eid] = state_data
+            
+            if domain_entities:
+                result = [f"Domain: {entity_id}"]
+                for eid, state_data in domain_entities.items():
+                    result.append(f"  {eid}: {state_data['state']}")
+                return "\n".join(result)
+            
+            return f"No entity or domain found matching '{entity_id}'"
 
-    async def _arun(self, query: str) -> str:
-        """Run async version."""
-        return self._run(query)
+        async def _arun(self, query: str) -> str:
+            """Run async version."""
+            return self._run(query)
+    
+    return CustomEntityQueryTool()
 
 class OverseerAgent:
     """Main class for the Overseer Agent."""
@@ -220,8 +216,8 @@ class OverseerAgent:
             
             # Initialize tools
             tools = [
-                StateSummaryTool(self.state_history),
-                EntityQueryTool(self.state_history, self.hass)
+                create_state_summary_tool(self.state_history),
+                create_entity_query_tool(self.state_history, self.hass)
             ]
             
             # Initialize the memory
